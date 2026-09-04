@@ -62,6 +62,12 @@ UI/adb 可切换 `--es tts SYSTEM|SHERPA_MATCHA`，同一文本同一 AEC 模式
 - **MOS** (Mean Opinion Score)：1-5 主观质量分，业界标准；PESQ/POLQA 是其客观近似（需参考信号，demo 不算）。
 - 内存口径：`native heap + Java heap` 进程峰值；SYSTEM 引擎跨进程合成，本进程 RSS 变化小属正常。
 - 精确测 RTF/内存需 Android Studio Profiler 或 `dumpsys meminfo <pid>`，demo 值为轻量近似。
+- Matcha 参数调优 A/B 实测：`silenceScale 0.2→0.6` 句间停顿仅 +4~26%（54→68ms 句尾），
+  `noiseScale 0.667→0.45` 对响度平稳度 CV 无感（0.613→0.629）——「忽高忽低/句末没气」
+  的根源是 Matcha 模型韵律与 `maxNumSentences=1` 逐句合成的句间音高漂移，参数只能微调，
+  治本需换模型（kokoro）或 `speed=0.9` 放缓语速。
+- `tts_<FAMILY>.wav`：每次实验同步存档 TTS 原始合成输出（不经扬声器+麦克风链路），
+  `results/analyze_pause.py` 可复测句间停顿与响度平稳度。
 
 ## ColorOS 实验三坑（可复现性关键）
 
