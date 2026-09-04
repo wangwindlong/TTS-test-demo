@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+
+# 本机配置
+local.properties
+
+# 实验产物（录音/分析结果不进仓库，用 demo 重新生成）
+results/
+
+# OS
+.DS_Store
