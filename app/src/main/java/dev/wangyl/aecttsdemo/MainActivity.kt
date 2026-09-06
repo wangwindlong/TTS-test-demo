@@ -3,6 +3,7 @@ package dev.wangyl.aecttsdemo
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,6 +29,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var engine: AecEngine
     private val logs = mutableStateListOf("ready.")
 
+    // 录音回放：recPlayingPath=正在播放的文件(null=停止)；recTick=实验落盘后自增，刷新文件存在状态
+    private val recPlayingPath = mutableStateOf<String?>(null)
+    private val recTick = mutableStateOf(0)
+    private var recPlayer: MediaPlayer? = null
+
     // adb 自动化：am start --es mode VC_AEC --es text "..." --el duration 6000
     private data class AutoRun(val mode: String, val text: String, val durationMs: Long, val family: TtsManager.Family)
     private var pendingAuto: AutoRun? = null
@@ -49,6 +55,11 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopPlayRec()
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -80,6 +91,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun runOne(mode: String, text: String, durationMs: Long, family: TtsManager.Family) {
+        stopPlayRec() // 实验开始前停止试听，避免播放声被录进实验
         mainScope.launch {
             appendLog("▶ start [$mode/$family] …")
             try {
@@ -90,6 +102,7 @@ class MainActivity : ComponentActivity() {
                 )
                 appendCsv(r, family)
                 writeLastRun(r)
+                recTick.value++
             } catch (e: Exception) {
                 appendLog("✘ [$mode/$family] ${e.message}")
                 writeLastRunRaw("""{"mode":"$mode","error":"${e.message}"}""")
@@ -127,6 +140,44 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun writeLastRunRaw(json: String) = lastRunFile().writeText(json)
+
+    // =========================================================================
+    // 录音回放（aec_runs/rec_<mode>.wav）
+    // =========================================================================
+    private fun recWavFile(mode: String): File =
+        File(getExternalFilesDir(null), "aec_runs/rec_${mode}.wav")
+
+    /** 播放/停止切换：再点同一个文件=停止，点另一个文件=切换播放 */
+    private fun togglePlayRec(file: File) {
+        if (recPlayer != null) {
+            val same = recPlayingPath.value == file.absolutePath
+            stopPlayRec()
+            if (same) return
+        }
+        val p = MediaPlayer()
+        try {
+            p.setDataSource(file.absolutePath)
+            p.setOnCompletionListener { stopPlayRec() }
+            p.prepare()
+            p.start()
+            recPlayer = p
+            recPlayingPath.value = file.absolutePath
+            appendLog("▶ 试听 ${file.name}")
+        } catch (e: Exception) {
+            p.release()
+            stopPlayRec()
+            appendLog("✘ 播放失败 ${file.name}: ${e.message}")
+        }
+    }
+
+    private fun stopPlayRec() {
+        recPlayer?.let { p ->
+            runCatching { p.stop() }
+            p.release()
+        }
+        recPlayer = null
+        recPlayingPath.value = null
+    }
 
     // =========================================================================
     // Compose UI
@@ -178,6 +229,43 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // ---- 当前模式录音回放：实验落盘后 recTick++ 刷新文件存在状态 ----
+                    val recFile = recWavFile(mode)
+                    val recExists = remember(mode, recTick.value) { recFile.exists() }
+                    val rawFile = recWavFile("${mode}_raw") // AI_DENOISE 的原始麦克风旁路录音
+                    val rawExists = remember(mode, recTick.value) { rawFile.exists() }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("录音试听", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (recExists) {
+                            Button(
+                                onClick = { togglePlayRec(recFile) },
+                                enabled = !running // 实验中禁用，避免播放声被录进麦克风
+                            ) {
+                                Text(
+                                    if (recPlayingPath.value == recFile.absolutePath) "■ 停止" else "▶ 播放",
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Text(recFile.name, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            Text("暂无 ${recFile.name}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (rawExists) {
+                            OutlinedButton(
+                                onClick = { togglePlayRec(rawFile) },
+                                enabled = !running
+                            ) {
+                                Text(
+                                    if (recPlayingPath.value == rawFile.absolutePath) "■ 停止" else "▶ 原始mic",
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = text, onValueChange = { text = it },
                         label = { Text("TTS 文本") },
@@ -223,6 +311,7 @@ class MainActivity : ComponentActivity() {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
+                                stopPlayRec() // 实验开始前停止试听，避免播放声被录进实验
                                 running = true
                                 scope.launch {
                                     try {
@@ -230,7 +319,9 @@ class MainActivity : ComponentActivity() {
                                         appendLog(
                                             "✔ [$mode/$family] aecAvail=${r.aecAvailable} aecOn=${r.aecEnabled} rec=${r.elapsedMs}ms"
                                         )
-                                        appendCsv(r, family); writeLastRun(r)
+                                        appendCsv(r, family)
+                                        writeLastRun(r)
+                                        recTick.value++
                                     } catch (e: Exception) {
                                         appendLog("✘ [$mode/$family] ${e.message}")
                                         writeLastRunRaw("""{"mode":"$mode","error":"${e.message}"}""")
@@ -242,6 +333,7 @@ class MainActivity : ComponentActivity() {
 
                         OutlinedButton(
                             onClick = {
+                                stopPlayRec() // 实验开始前停止试听，避免播放声被录进实验
                                 running = true
                                 scope.launch {
                                     MODES.forEach { m ->
@@ -251,6 +343,7 @@ class MainActivity : ComponentActivity() {
                                                 "✔ [$m/$family] aecAvail=${r.aecAvailable} aecOn=${r.aecEnabled} rec=${r.elapsedMs}ms"
                                             )
                                             appendCsv(r, family); writeLastRun(r)
+                                            recTick.value++
                                         } catch (e: Exception) {
                                             appendLog("✘ [$m/$family] ${e.message}")
                                             writeLastRunRaw("""{"mode":"$m","error":"${e.message}"}""")
