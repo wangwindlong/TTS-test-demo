@@ -26,6 +26,7 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
+
     private lateinit var engine: AecEngine
     private val logs = mutableStateListOf("ready.")
 
